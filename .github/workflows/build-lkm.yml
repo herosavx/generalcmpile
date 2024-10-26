@@ -1,0 +1,104 @@
+name: Build LKM
+
+on: [workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_MAXSIZE: "2G"
+      CCACHE_HARDLINK: "true"
+
+      KERNEL_VERSION: "android12-5.10"
+      OS_PATCH_LEVEL: "2023-01"
+      SUB_LEVEL: "149"
+      KERNEL_VERSION_TAG: "android12-5.10-2023-01"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: SelfRepo
+          fetch-depth: 0
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+
+      - name: Setup kernel source
+        run: |
+          cd $GITHUB_WORKSPACE
+          sudo apt-get install repo -y
+          mkdir android-kernel && cd android-kernel
+          repo init --depth=1 --u https://android.googlesource.com/kernel/manifest -b common-${KERNEL_VERSION_TAG} --repo-rev=v2.16
+          REMOTE_BRANCH=$(git ls-remote https://android.googlesource.com/kernel/common ${KERNEL_VERSION_TAG})
+          DEFAULT_MANIFEST_PATH=.repo/manifests/default.xml
+          if grep -q deprecated <<< $REMOTE_BRANCH; then
+            echo "Found deprecated branch: ${KERNEL_VERSION_TAG}"
+            sed -i 's/"${{ env.KERNEL_VERSION_TAG }}"/"deprecated\/${{ env.KERNEL_VERSION_TAG }}"/g' $DEFAULT_MANIFEST_PATH
+            cat $DEFAULT_MANIFEST_PATH
+          fi
+          repo --version
+          repo --trace sync -c -j$(nproc --all) --no-tags
+
+      - name: Add/Setup MemKernel LKM
+        working-directory: android-kernel
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/Poko-Apps/MemKernel/main/kernel/setup.sh" | bash -s M potemi
+          pip install ast-grep-cli
+          sudo apt-get install llvm-15 -y
+          ast-grep -U -p '$$$ check_exports($$$) {$$$}' -r '' common/scripts/mod/modpost.c
+          ast-grep -U -p 'check_exports($$$);' -r '' common/scripts/mod/modpost.c
+          echo "drivers/memkernel/potemi_memk.ko" >> common/android/gki_aarch64_modules
+          
+          # bazel build, android14-5.15, android14-6.1 use bazel
+          if [ ! -e build/build.sh ]; then
+            sed -i 's/needs unknown symbol/Dont abort when unknown symbol/g' build/kernel/*.sh || echo "No unknown symbol scripts found"
+            if [ -e common/modules.bzl ]; then
+              sed -i 's/_COMMON_GKI_MODULES_LIST = \[/_COMMON_GKI_MODULES_LIST = \[ "drivers\/memkernel\/potemi_memk.ko",/g' common/modules.bzl
+            fi
+          else
+            TARGET_FILE="build/kernel/build.sh"
+            if [ ! -e "$TARGET_FILE" ]; then
+              TARGET_FILE="build/build.sh"
+            fi
+            sed -i 's/needs unknown symbol/Dont abort when unknown symbol/g' $TARGET_FILE || echo "No unknown symbol in $TARGET_FILE"
+            sed -i 's/if ! diff -u "\${KERNEL_DIR}\/\${MODULES_ORDER}" "\${OUT_DIR}\/modules\.order"; then/if false; then/g' $TARGET_FILE
+            sed -i 's@${ROOT_DIR}/build/abi/compare_to_symbol_list@echo@g' $TARGET_FILE
+            sed -i 's/needs unknown symbol/Dont abort when unknown symbol/g' build/kernel/*.sh || echo "No unknown symbol scripts found"
+          fi
+      
+      - name: Make working directory clean to avoid dirty
+        working-directory: android-kernel
+        run: |
+          rm common/android/abi_gki_protected_exports_* || echo "No protected exports!"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          cd common/ && git add -A && git commit -a -m "Add MemKernel"
+          repo status
+
+      - name: Build Kernel/LKM
+        working-directory: android-kernel
+        run: |
+          if [ -e build/build.sh ]; then
+            LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang"
+          else
+            tools/bazel run --disk_cache=/home/runner/.cache/bazel --config=fast --config=stamp --lto=thin //common:kernel_aarch64_dist -- --dist_dir=dist
+          fi
+     
+      - name: Prepare Memkernel LKM
+        run: |
+          OUTDIR=android-kernel/out/${KERNEL_VERSION}/dist
+          if [ ! -e $OUTDIR ]; then
+            OUTDIR=android-kernel/dist
+          fi
+          mkdir output
+          llvm-strip-15 -d $OUTDIR/potemi_memk.ko
+          mv $OUTDIR/potemi_memk.ko ./output/
+
+      - name: Upload LKM
+        uses: actions/upload-artifact@v4
+        with:
+          name: memkernel-lkm
+          path: ./output/*_memk.ko
+          
