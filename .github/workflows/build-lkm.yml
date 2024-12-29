@@ -41,21 +41,43 @@ jobs:
           repo --version
           repo --trace sync -c -j$(nproc --all) --no-tags
 
-      - name: Add/Setup MemKernel LKM
+      - name: Add MemKernel LKM
         working-directory: android-kernel
         run: |
           curl -LSs "https://raw.githubusercontent.com/Poko-Apps/MemKernel/main/kernel/setup.sh" | bash -s M potemi
+      
+      - name: Add KTouchEvent LKM
+        working-directory: android-kernel
+        env:
+          GH_TK: ${{ secrets.GH_A_TOK }}
+        run: |
+          GKI_ROOT=$(pwd)
+          DRIVER_DIR=$GKI_ROOT/common/drivers
+          DRIVER_MAKEFILE=$DRIVER_DIR/Makefile
+          DRIVER_KCONFIG=$DRIVER_DIR/Kconfig
+          git clone https://$GH_TK@github.com/herosavx/KTouchEvent.git
+          cd $DRIVER_DIR
+          ln -sf "$(realpath --relative-to="$DRIVER_DIR" "$GKI_ROOT/KTouchEvent/kernel")" "ktouchev" && echo "[+] Symlink created."
+          grep -q "ktouchev" "$DRIVER_MAKEFILE" || printf "\nobj-\$(CONFIG_KTOUCHEV) += ktouchev/\n" >> "$DRIVER_MAKEFILE" && echo "[+] Modified Makefile."
+          grep -q "source \"drivers/ktouchev/Kconfig\"" "$DRIVER_KCONFIG" || sed -i "/endmenu/i\source \"drivers/ktouchev/Kconfig\"" "$DRIVER_KCONFIG" && echo "[+] Modified Kconfig."
+          echo '[+] Done.'
+
+      - name: Setup All LKMs
+        working-directory: android-kernel
+        run: |
           pip install ast-grep-cli
           sudo apt-get install llvm-15 -y
           ast-grep -U -p '$$$ check_exports($$$) {$$$}' -r '' common/scripts/mod/modpost.c
           ast-grep -U -p 'check_exports($$$);' -r '' common/scripts/mod/modpost.c
           echo "drivers/memkernel/potemi_memk.ko" >> common/android/gki_aarch64_modules
+          echo "drivers/ktouchev/ktouchev.ko" >> common/android/gki_aarch64_modules
           
           # bazel build, android14-5.15, android14-6.1 use bazel
           if [ ! -e build/build.sh ]; then
             sed -i 's/needs unknown symbol/Dont abort when unknown symbol/g' build/kernel/*.sh || echo "No unknown symbol scripts found"
             if [ -e common/modules.bzl ]; then
               sed -i 's/_COMMON_GKI_MODULES_LIST = \[/_COMMON_GKI_MODULES_LIST = \[ "drivers\/memkernel\/potemi_memk.ko",/g' common/modules.bzl
+              sed -i 's/_COMMON_GKI_MODULES_LIST = \[/_COMMON_GKI_MODULES_LIST = \[ "drivers\/ktouchev\/ktouchev.ko",/g' common/modules.bzl
             fi
           else
             TARGET_FILE="build/kernel/build.sh"
@@ -74,10 +96,10 @@ jobs:
           rm common/android/abi_gki_protected_exports_* || echo "No protected exports!"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-          cd common/ && git add -A && git commit -a -m "Add MemKernel"
+          cd common/ && git add -A && git commit -a -m "Add Various LKMs"
           repo status
 
-      - name: Build Kernel/LKM
+      - name: Build Kernel/LKMs
         working-directory: android-kernel
         run: |
           if [ -e build/build.sh ]; then
@@ -86,7 +108,7 @@ jobs:
             tools/bazel run --disk_cache=/home/runner/.cache/bazel --config=fast --config=stamp --lto=thin //common:kernel_aarch64_dist -- --dist_dir=dist
           fi
      
-      - name: Prepare Memkernel LKM
+      - name: Prepare All LKMs
         run: |
           OUTDIR=android-kernel/out/${KERNEL_VERSION}/dist
           if [ ! -e $OUTDIR ]; then
@@ -94,11 +116,13 @@ jobs:
           fi
           mkdir output
           llvm-strip-15 -d $OUTDIR/potemi_memk.ko
+          llvm-strip-15 -d $OUTDIR/ktouchev.ko
           mv $OUTDIR/potemi_memk.ko ./output/
+          mv $OUTDIR/ktouchev.ko ./output/
 
-      - name: Upload LKM
+      - name: Upload LKMs
         uses: actions/upload-artifact@v4
         with:
-          name: memkernel-lkm
-          path: ./output/*_memk.ko
+          name: lkms
+          path: ./output/*.ko
           
