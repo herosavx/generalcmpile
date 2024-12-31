@@ -58,7 +58,7 @@ jobs:
           git clone https://$GH_TK@github.com/herosavx/KTouchEvent.git
           cd $DRIVER_DIR
           ln -sf "$(realpath --relative-to="$DRIVER_DIR" "$GKI_ROOT/KTouchEvent/kernel")" "ktouchev" && echo "[+] Symlink created."
-          grep -q "ktouchev" "$DRIVER_MAKEFILE" || printf "\nobj-\$(CONFIG_KTOUCHEV) += ktouchev/\n" >> "$DRIVER_MAKEFILE" && echo "[+] Modified Makefile."
+          grep -q "ktouchev" "$DRIVER_MAKEFILE" || printf "\nobj-\$(CONFIG_KTOUCH_EV) += ktouchev/\n" >> "$DRIVER_MAKEFILE" && echo "[+] Modified Makefile."
           grep -q "source \"drivers/ktouchev/Kconfig\"" "$DRIVER_KCONFIG" || sed -i "/endmenu/i\source \"drivers/ktouchev/Kconfig\"" "$DRIVER_KCONFIG" && echo "[+] Modified Kconfig."
           echo '[+] Done.'
 
