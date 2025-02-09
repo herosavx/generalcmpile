@@ -61,6 +61,22 @@ jobs:
           grep -q "ktouchev" "$DRIVER_MAKEFILE" || printf "\nobj-\$(CONFIG_KTOUCH_EV) += ktouchev/\n" >> "$DRIVER_MAKEFILE" && echo "[+] Modified Makefile."
           grep -q "source \"drivers/ktouchev/Kconfig\"" "$DRIVER_KCONFIG" || sed -i "/endmenu/i\source \"drivers/ktouchev/Kconfig\"" "$DRIVER_KCONFIG" && echo "[+] Modified Kconfig."
           echo '[+] Done.'
+          
+      - name: Add CovertMem LKM
+        working-directory: android-kernel
+        env:
+          GH_TK: ${{ secrets.GH_A_TOK }}
+        run: |
+          GKI_ROOT=$(pwd)
+          DRIVER_DIR=$GKI_ROOT/common/drivers
+          DRIVER_MAKEFILE=$DRIVER_DIR/Makefile
+          DRIVER_KCONFIG=$DRIVER_DIR/Kconfig
+          git clone https://$GH_TK@github.com/herosavx/CovertMem.git
+          cd $DRIVER_DIR
+          ln -sf "$(realpath --relative-to="$DRIVER_DIR" "$GKI_ROOT/CovertMem/kernel")" "covmem" && echo "[+] Symlink created."
+          grep -q "covmem" "$DRIVER_MAKEFILE" || printf "\nobj-\$(CONFIG_COVERTMEM) += covmem/\n" >> "$DRIVER_MAKEFILE" && echo "[+] Modified Makefile."
+          grep -q "source \"drivers/covmem/Kconfig\"" "$DRIVER_KCONFIG" || sed -i "/endmenu/i\source \"drivers/covmem/Kconfig\"" "$DRIVER_KCONFIG" && echo "[+] Modified Kconfig."
+          echo '[+] Done.'
 
       - name: Setup All LKMs
         working-directory: android-kernel
@@ -71,6 +87,7 @@ jobs:
           ast-grep -U -p 'check_exports($$$);' -r '' common/scripts/mod/modpost.c
           echo "drivers/memkernel/potemi_memk.ko" >> common/android/gki_aarch64_modules
           echo "drivers/ktouchev/ktouchev.ko" >> common/android/gki_aarch64_modules
+          echo "drivers/covmem/covmem.ko" >> common/android/gki_aarch64_modules
           
           # bazel build, android14-5.15, android14-6.1 use bazel
           if [ ! -e build/build.sh ]; then
@@ -78,6 +95,7 @@ jobs:
             if [ -e common/modules.bzl ]; then
               sed -i 's/_COMMON_GKI_MODULES_LIST = \[/_COMMON_GKI_MODULES_LIST = \[ "drivers\/memkernel\/potemi_memk.ko",/g' common/modules.bzl
               sed -i 's/_COMMON_GKI_MODULES_LIST = \[/_COMMON_GKI_MODULES_LIST = \[ "drivers\/ktouchev\/ktouchev.ko",/g' common/modules.bzl
+              sed -i 's/_COMMON_GKI_MODULES_LIST = \[/_COMMON_GKI_MODULES_LIST = \[ "drivers\/covmem\/covmem.ko",/g' common/modules.bzl
             fi
           else
             TARGET_FILE="build/kernel/build.sh"
@@ -117,8 +135,10 @@ jobs:
           mkdir output
           llvm-strip-15 -d $OUTDIR/potemi_memk.ko
           llvm-strip-15 -d $OUTDIR/ktouchev.ko
+          llvm-strip-15 -d $OUTDIR/covmem.ko
           mv $OUTDIR/potemi_memk.ko ./output/
           mv $OUTDIR/ktouchev.ko ./output/
+          mv $OUTDIR/covmem.ko ./output/
 
       - name: Upload LKMs
         uses: actions/upload-artifact@v4
